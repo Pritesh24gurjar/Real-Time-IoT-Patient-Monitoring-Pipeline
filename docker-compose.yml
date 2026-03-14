@@ -1,0 +1,73 @@
+# Docker Compose for Kafka Cluster (KRaft mode - no Zookeeper)
+# Usage:
+#   docker-compose up -d           # Start Kafka
+#   docker-compose down            # Stop Kafka
+#   docker-compose logs -f         # View logs
+
+services:
+  # Kafka Broker with KRaft (Kafka Raft) mode - no Zookeeper needed
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka-broker
+    hostname: kafka
+    ports:
+      - "9092:9092"  # For Docker internal (kafka-ui)
+      - "9094:9094"  # For host machine (Python scripts)
+    environment:
+      # KRaft cluster configuration
+      CLUSTER_ID: "DE-project-cluster-001"
+
+      # Enable KRaft mode
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+
+      # Listeners configuration - for Docker network access
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # Broker settings
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
+
+      # Performance tuning for IoT data
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+      # Memory settings
+      KAFKA_HEAP_OPTS: "-Xmx512M -Xms512M"
+
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    restart: unless-stopped
+
+  # Kafka UI for monitoring
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "DE-Project"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+    driver: local

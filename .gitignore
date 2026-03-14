@@ -1,8 +1,10 @@
 # Large CSV data files in data directory
 data/*.csv
 
-# Organized data directories (typically contain processed/large files)
+# WISDM dataset directories (large files)
+data/wisdm-dataset/
 data/wisdm-dataset-organized/
+
 
 # Python cache
 __pycache__/
