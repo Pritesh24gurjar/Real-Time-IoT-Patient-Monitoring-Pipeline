@@ -1,0 +1,30 @@
+# Large CSV data files in data directory
+data/*.csv
+
+# Organized data directories (typically contain processed/large files)
+data/wisdm-dataset-organized/
+
+# Python cache
+__pycache__/
+data/__pycache__/
+scripts/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter notebooks (often contain large outputs)
+*.ipynb_checkpoints/
+
+# Environment files
+.env
+.venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep documentation (explicitly include)
+!*.md
+data/*.md
+
