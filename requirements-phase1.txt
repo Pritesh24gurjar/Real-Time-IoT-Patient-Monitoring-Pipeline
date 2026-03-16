@@ -7,8 +7,9 @@ confluent-kafka>=2.3.0
 pandas>=2.0.0
 numpy>=1.24.0
 
+# AWS S3 Integration (for ETL pipeline)
+boto3>=1.34.0
+python-dotenv>=1.0.0
+
 # For Spark Structured Streaming (install PySpark separately)
 # pyspark>=3.4.0  # Install via: pip install pyspark
-
-# Optional: For development and testing
-python-dotenv>=1.0.0

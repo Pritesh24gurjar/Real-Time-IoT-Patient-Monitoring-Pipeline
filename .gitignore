@@ -5,6 +5,15 @@ data/*.csv
 data/wisdm-dataset/
 data/wisdm-dataset-organized/
 
+# S3 mock data (local testing)
+data/s3_mock/
+
+# ETL output data (local testing)
+data/etl_output/
+
+# S3 ETL output (production testing)
+data/s3_etl_output/
+
 
 # Python cache
 __pycache__/
