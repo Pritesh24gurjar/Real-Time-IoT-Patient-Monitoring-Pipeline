@@ -119,6 +119,8 @@ def create_spark_session():
         .appName("HealthData-ETL-Pipeline") \
         .config("spark.sql.shuffle.partitions", "4") \
         .config("spark.sql.streaming.checkpointLocation", "/tmp/checkpoints/etl") \
+        .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
+        .config("spark.executor.extraJavaOptions", "-Djava.security.manager=allow") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("WARN")
