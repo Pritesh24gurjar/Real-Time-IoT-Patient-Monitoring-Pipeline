@@ -1,6 +1,10 @@
 # ETL Pipeline - Bronze/Silver/Gold Architecture
 
 Complete ETL implementation based on the project specification document.
+Airflow now schedules the pipeline; this file documents the Spark layers and
+output layout.
+See [AIRFLOW_ETL_ORCHESTRATION.md](./AIRFLOW_ETL_ORCHESTRATION.md) for the
+current startup flow.
 
 ## Architecture Overview
 
@@ -17,12 +21,12 @@ Complete ETL implementation based on the project specification document.
 
 ## Data Flow
 
-### 1. Kafka → S3 Landing (Every 30 seconds)
+### 1. Kafka → S3 Landing
 - `kafka_to_local_uploader.py` consumes from Kafka
 - Batches data by topic (vitals/movement)
 - Saves as JSONL with timestamp partitioning
 
-### 2. Landing → Bronze (Every 30 seconds)
+### 2. Landing → Bronze
 - Reads raw JSON from landing zone
 - Adds lineage metadata (`etl_processed_time`, `source_file`)
 - Routes to vitals/movement bronze tables
@@ -43,9 +47,13 @@ Complete ETL implementation based on the project specification document.
 
 ```
 scripts/
-├── etl_pipeline.py          # Main ETL (Bronze/Silver/Gold)
-├── etl_scheduler.py         # Runs ETL every 30 seconds
+├── etl_pipeline.py             # Main ETL (Bronze/Silver/Gold)
+├── etl_scheduler.py            # Local fallback wrapper for Airflow
 ├── kafka_to_local_uploader.py  # Kafka → Local (simulates S3)
+└── ...
+
+dags/
+├── health_etl_dag.py           # Airflow DAG for scheduled ETL
 └── ...
 
 data/
@@ -59,31 +67,30 @@ data/
 
 ## Quick Start
 
-### Option 1: Run All Components (Recommended)
+### Recommended Runtime
+
+Use Airflow for scheduled ETL:
 
 ```bash
-# Double-click or run:
-start_pipeline.bat
+docker-compose up -d
 ```
 
-This opens 5 terminal windows:
-1. Vitals Producer
-2. Movement Producer
-3. Alert Engine (real-time)
-4. S3/Local Uploader (Kafka → Landing)
-5. **ETL Scheduler** (Landing → Bronze → Silver → Gold)
+Then open:
 
-### Option 2: Run ETL Manually
+- Airflow: `http://localhost:8081`
+- Kafka UI: `http://localhost:8080`
+
+### Manual ETL Runs
 
 ```bash
 # Activate venv
 .\.venv\Scripts\Activate.ps1
 
 # Run ETL once
-python scripts/etl_pipeline.py
+python scripts/etl_pipeline.py --mode local
 
-# Run ETL scheduler (every 30 seconds)
-python scripts/etl_scheduler.py --interval 30 --auto-copy
+# Run fallback scheduler
+python scripts/etl_scheduler.py --once --mode local
 ```
 
 ## ETL Layers Explained
@@ -182,25 +189,15 @@ otherwise       → 0 (Normal)
 }
 ```
 
-## Scheduler Configuration
+## Scheduling
 
-### Testing Mode (30 seconds)
-```bash
-python scripts/etl_scheduler.py --interval 30 --auto-copy
-```
+Airflow is the primary scheduler for the ETL:
 
-- Runs every 30 seconds
-- Auto-copies data from `s3_mock` to `landing`
-- Cleans up processed files after each run
+- DAG: `health_etl_pipeline`
+- File: `dags/health_etl_dag.py`
+- UI: `http://localhost:8081`
 
-### Production Mode (10 minutes)
-```bash
-python scripts/etl_scheduler.py --interval 600
-```
-
-- Runs every 10 minutes
-- Expects data to be in landing zone from Kafka consumers
-- Use with S3 paths (configure `.env`)
+Use `scripts/etl_scheduler.py` only as a fallback when Airflow is not running.
 
 ## Monitoring ETL Progress
 
@@ -280,8 +277,10 @@ gold_df.printSchema()
 
 3. **Schedule with Airflow/Cron:**
    ```bash
-   # Cron every 10 minutes
-   */10 * * * * cd /path && python scripts/etl_scheduler.py --interval 600
+   # Airflow is the primary scheduler
+   docker-compose up -d
+   # Optional fallback run
+   python scripts/etl_scheduler.py --interval 600 --mode local
    ```
 
 4. **Monitor with CloudWatch:**
