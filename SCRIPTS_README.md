@@ -1,6 +1,8 @@
 # Pipeline Launcher Scripts
 
 Quick-start scripts to run all Phase 1 components in separate terminal windows.
+Airflow now handles ETL scheduling, so the launcher scripts cover the source
+data and alerting pieces.
 
 ## Files
 
@@ -135,4 +137,5 @@ For production with S3 uploads:
 1. Update `.env` with AWS credentials
 2. Edit `start_pipeline.bat` / `.ps1`:
    - Change `kafka_to_local_uploader.py` to `kafka_to_s3_uploader.py`
-3. Run the script
+3. Start Airflow with `docker-compose up -d`
+4. Trigger `health_etl_pipeline` in the Airflow UI

@@ -14,6 +14,8 @@ Usage:
 
 import os
 import sys
+import argparse
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -27,28 +29,86 @@ AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_SESSION_TOKEN = os.getenv('AWS_SESSION_TOKEN')
 AWS_REGION = os.getenv('AWS_REGION', 'us-west-2')
 S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
-
-# S3 Paths
-S3_LANDING = f"s3://{S3_BUCKET_NAME}/landing/"
-S3_BRONZE_VITALS = f"s3://{S3_BUCKET_NAME}/bronze/vitals/"
-S3_BRONZE_MOVEMENT = f"s3://{S3_BUCKET_NAME}/bronze/movement/"
-S3_SILVER_VITALS = f"s3://{S3_BUCKET_NAME}/silver/vitals/"
-S3_SILVER_MOVEMENT = f"s3://{S3_BUCKET_NAME}/silver/movement/"
-S3_GOLD_VITALS = f"s3://{S3_BUCKET_NAME}/gold/vitals_summary/"
-S3_GOLD_MOVEMENT = f"s3://{S3_BUCKET_NAME}/gold/movement_summary/"
-
-# Local testing paths (when S3 not configured)
-LOCAL_BASE = Path(r"C:\Users\prite\Documents\CWRU courses\data eng\DE project\data\etl_output")
-LOCAL_LANDING = LOCAL_BASE / "landing"
-LOCAL_BRONZE_VITALS = LOCAL_BASE / "bronze" / "vitals"
-LOCAL_BRONZE_MOVEMENT = LOCAL_BASE / "bronze" / "movement"
-LOCAL_SILVER_VITALS = LOCAL_BASE / "silver" / "vitals"
-LOCAL_SILVER_MOVEMENT = LOCAL_BASE / "silver" / "movement"
-LOCAL_GOLD_VITALS = LOCAL_BASE / "gold" / "vitals_summary"
-LOCAL_GOLD_MOVEMENT = LOCAL_BASE / "gold" / "movement_summary"
+ETL_LOCAL_BASE_DIR = Path(
+    os.getenv(
+        "ETL_LOCAL_BASE_DIR",
+        Path(__file__).resolve().parents[1] / "data" / "etl_output",
+    )
+)
 
 # Fall detection threshold
 FALL_SVM_THRESHOLD = 25.0
+
+
+@dataclass(frozen=True)
+class ETLRuntimeConfig:
+    """Resolved runtime configuration for the ETL pipeline."""
+
+    use_local: bool
+    local_base: Path
+    s3_bucket_name: str | None
+
+    @property
+    def mode_label(self) -> str:
+        return "Local Testing" if self.use_local else "Production (S3)"
+
+    @property
+    def landing_path(self) -> Path | str:
+        return self.local_base / "landing" if self.use_local else f"s3://{self.s3_bucket_name}/landing/"
+
+    @property
+    def bronze_vitals_path(self) -> Path | str:
+        return self.local_base / "bronze" / "vitals" if self.use_local else f"s3://{self.s3_bucket_name}/bronze/vitals/"
+
+    @property
+    def bronze_movement_path(self) -> Path | str:
+        return self.local_base / "bronze" / "movement" if self.use_local else f"s3://{self.s3_bucket_name}/bronze/movement/"
+
+    @property
+    def silver_vitals_path(self) -> Path | str:
+        return self.local_base / "silver" / "vitals" if self.use_local else f"s3://{self.s3_bucket_name}/silver/vitals/"
+
+    @property
+    def silver_movement_path(self) -> Path | str:
+        return self.local_base / "silver" / "movement" if self.use_local else f"s3://{self.s3_bucket_name}/silver/movement/"
+
+    @property
+    def gold_vitals_path(self) -> Path | str:
+        return self.local_base / "gold" / "vitals_summary" if self.use_local else f"s3://{self.s3_bucket_name}/gold/vitals_summary/"
+
+    @property
+    def gold_movement_path(self) -> Path | str:
+        return self.local_base / "gold" / "movement_summary" if self.use_local else f"s3://{self.s3_bucket_name}/gold/movement_summary/"
+
+
+def build_runtime_config(mode: str = "auto", local_base: Path | None = None) -> ETLRuntimeConfig:
+    """
+    Resolve runtime configuration without asking for interactive input.
+
+    The selection order is:
+    - explicit CLI mode when provided
+    - S3 only when credentials and bucket are present
+    - local fallback otherwise
+    """
+    normalized_mode = (mode or "auto").lower()
+    resolved_local_base = local_base or ETL_LOCAL_BASE_DIR
+
+    if normalized_mode not in {"auto", "local", "s3"}:
+        raise ValueError(f"Unsupported ETL mode: {mode}")
+
+    if normalized_mode == "local":
+        return ETLRuntimeConfig(use_local=True, local_base=resolved_local_base, s3_bucket_name=None)
+
+    if normalized_mode == "s3":
+        if not S3_BUCKET_NAME:
+            raise ValueError("S3 mode requested but S3_BUCKET_NAME is not configured.")
+        return ETLRuntimeConfig(use_local=False, local_base=resolved_local_base, s3_bucket_name=S3_BUCKET_NAME)
+
+    has_s3_config = all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, S3_BUCKET_NAME])
+    if has_s3_config:
+        return ETLRuntimeConfig(use_local=False, local_base=resolved_local_base, s3_bucket_name=S3_BUCKET_NAME)
+
+    return ETLRuntimeConfig(use_local=True, local_base=resolved_local_base, s3_bucket_name=None)
 
 
 def create_spark_session():
@@ -59,13 +119,15 @@ def create_spark_session():
         .appName("HealthData-ETL-Pipeline") \
         .config("spark.sql.shuffle.partitions", "4") \
         .config("spark.sql.streaming.checkpointLocation", "/tmp/checkpoints/etl") \
+        .config("spark.driver.extraJavaOptions", "-Djava.security.manager=allow") \
+        .config("spark.executor.extraJavaOptions", "-Djava.security.manager=allow") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("WARN")
     return spark
 
 
-def process_bronze(spark, input_path, use_local=False):
+def process_bronze(spark, input_path, output_paths, use_local=False):
     """
     Bronze Layer - Raw ingestion with lineage metadata.
     
@@ -133,21 +195,21 @@ def process_bronze(spark, input_path, use_local=False):
     
     # Write to bronze layer
     if vitals_bronze.count() > 0:
-        output_path = LOCAL_BRONZE_VITALS if use_local else S3_BRONZE_VITALS
+        output_path = output_paths["bronze_vitals"]
         if use_local:
             output_path.mkdir(parents=True, exist_ok=True)
         vitals_bronze.write.mode("append").parquet(str(output_path) if use_local else output_path)
         print(f"✓ Vitals bronze saved to: {output_path}")
     
     if movement_bronze.count() > 0:
-        output_path = LOCAL_BRONZE_MOVEMENT if use_local else S3_BRONZE_MOVEMENT
+        output_path = output_paths["bronze_movement"]
         if use_local:
             output_path.mkdir(parents=True, exist_ok=True)
         movement_bronze.write.mode("append").parquet(str(output_path) if use_local else output_path)
         print(f"✓ Movement bronze saved to: {output_path}")
 
 
-def process_silver(spark, use_local=False):
+def process_silver(spark, output_paths, use_local=False):
     """
     Silver Layer - Data cleaning and feature engineering.
     
@@ -162,7 +224,7 @@ def process_silver(spark, use_local=False):
     
     # --- VITALS CLEANING ---
     print("\nCleaning Vitals Data...")
-    vitals_input = LOCAL_BRONZE_VITALS if use_local else S3_BRONZE_VITALS
+    vitals_input = output_paths["bronze_vitals"]
     
     if use_local and not vitals_input.exists():
         print(f"  ✗ Bronze vitals path does not exist: {vitals_input}")
@@ -187,7 +249,7 @@ def process_silver(spark, use_local=False):
         print(f"  After cleaning: {vitals_silver.count()} records")
         
         if vitals_silver.count() > 0:
-            output_path = LOCAL_SILVER_VITALS if use_local else S3_SILVER_VITALS
+            output_path = output_paths["silver_vitals"]
             if use_local:
                 output_path.mkdir(parents=True, exist_ok=True)
             vitals_silver.write.mode("append").parquet(str(output_path) if use_local else output_path)
@@ -198,7 +260,7 @@ def process_silver(spark, use_local=False):
     
     # --- MOVEMENT CLEANING & MATH ---
     print("\nCleaning Movement Data...")
-    movement_input = LOCAL_BRONZE_MOVEMENT if use_local else S3_BRONZE_MOVEMENT
+    movement_input = output_paths["bronze_movement"]
     
     if use_local and not movement_input.exists():
         print(f"  ✗ Bronze movement path does not exist: {movement_input}")
@@ -222,7 +284,7 @@ def process_silver(spark, use_local=False):
         print(f"  ✓ Added SVM (Signal Vector Magnitude) feature")
         
         if movement_silver.count() > 0:
-            output_path = LOCAL_SILVER_MOVEMENT if use_local else S3_SILVER_MOVEMENT
+            output_path = output_paths["silver_movement"]
             if use_local:
                 output_path.mkdir(parents=True, exist_ok=True)
             movement_silver.write.mode("append").parquet(str(output_path) if use_local else output_path)
@@ -232,7 +294,7 @@ def process_silver(spark, use_local=False):
         print(f"  ✗ Movement processing error: {e}")
 
 
-def process_gold(spark, use_local=False):
+def process_gold(spark, output_paths, use_local=False):
     """
     Gold Layer - Clinical aggregation for dashboards.
     
@@ -247,7 +309,7 @@ def process_gold(spark, use_local=False):
     
     # --- VITALS GOLD (MEWS Score) ---
     print("\nAggregating Vitals (MEWS Score)...")
-    vitals_input = LOCAL_SILVER_VITALS if use_local else S3_SILVER_VITALS
+    vitals_input = output_paths["silver_vitals"]
     
     if use_local and not vitals_input.exists():
         print(f"  ✗ Silver vitals path does not exist: {vitals_input}")
@@ -282,7 +344,7 @@ def process_gold(spark, use_local=False):
         print(f"  ✓ Added MEWS score (Modified Early Warning Score)")
         
         if vitals_gold.count() > 0:
-            output_path = LOCAL_GOLD_VITALS if use_local else S3_GOLD_VITALS
+            output_path = output_paths["gold_vitals"]
             if use_local:
                 output_path.mkdir(parents=True, exist_ok=True)
             vitals_gold.write.mode("append").parquet(str(output_path) if use_local else output_path)
@@ -297,7 +359,7 @@ def process_gold(spark, use_local=False):
     
     # --- MOVEMENT GOLD (Fall Detection) ---
     print("\nAggregating Movement (Fall Detection)...")
-    movement_input = LOCAL_SILVER_MOVEMENT if use_local else S3_SILVER_MOVEMENT
+    movement_input = output_paths["silver_movement"]
     
     if use_local and not movement_input.exists():
         print(f"  ✗ Silver movement path does not exist: {movement_input}")
@@ -325,7 +387,7 @@ def process_gold(spark, use_local=False):
         print(f"  ✓ Fall threshold: SVM > {FALL_SVM_THRESHOLD}")
         
         if movement_gold.count() > 0:
-            output_path = LOCAL_GOLD_MOVEMENT if use_local else S3_GOLD_MOVEMENT
+            output_path = output_paths["gold_movement"]
             if use_local:
                 output_path.mkdir(parents=True, exist_ok=True)
             movement_gold.write.mode("append").parquet(str(output_path) if use_local else output_path)
@@ -339,7 +401,31 @@ def process_gold(spark, use_local=False):
         print(f"  ✗ Movement gold processing error: {e}")
 
 
-def run_etl_pipeline(spark, use_local=True):
+def resolve_output_paths(config: ETLRuntimeConfig):
+    """Build runtime-specific landing and output paths."""
+    if config.use_local:
+        return {
+            "landing": config.landing_path,
+            "bronze_vitals": config.bronze_vitals_path,
+            "bronze_movement": config.bronze_movement_path,
+            "silver_vitals": config.silver_vitals_path,
+            "silver_movement": config.silver_movement_path,
+            "gold_vitals": config.gold_vitals_path,
+            "gold_movement": config.gold_movement_path,
+        }
+
+    return {
+        "landing": config.landing_path,
+        "bronze_vitals": config.bronze_vitals_path,
+        "bronze_movement": config.bronze_movement_path,
+        "silver_vitals": config.silver_vitals_path,
+        "silver_movement": config.silver_movement_path,
+        "gold_vitals": config.gold_vitals_path,
+        "gold_movement": config.gold_movement_path,
+    }
+
+
+def run_etl_pipeline(spark, use_local=True, output_paths=None):
     """Run complete ETL pipeline: Bronze → Silver → Gold."""
     
     print("\n" + "="*60)
@@ -349,11 +435,19 @@ def run_etl_pipeline(spark, use_local=True):
     print(f"Mode: {'Local Testing' if use_local else 'Production (S3)'}")
     
     # Determine input path
+    output_paths = output_paths or resolve_output_paths(
+        ETLRuntimeConfig(
+            use_local=use_local,
+            local_base=ETL_LOCAL_BASE_DIR,
+            s3_bucket_name=S3_BUCKET_NAME,
+        )
+    )
+
     if use_local:
-        input_path = LOCAL_LANDING
+        input_path = output_paths["landing"]
         print(f"Input: {input_path}")
     else:
-        input_path = S3_LANDING
+        input_path = output_paths["landing"]
         print(f"Input: {input_path}")
     
     # Check if input has data
@@ -364,35 +458,49 @@ def run_etl_pipeline(spark, use_local=True):
         return
     
     # Run ETL layers
-    process_bronze(spark, input_path, use_local)
-    process_silver(spark, use_local)
-    process_gold(spark, use_local)
+    process_bronze(spark, input_path, output_paths, use_local)
+    process_silver(spark, output_paths, use_local)
+    process_gold(spark, output_paths, use_local)
     
     print("\n" + "="*60)
     print("ETL PIPELINE - Complete")
     print("="*60)
 
 
-def main():
+def parse_args(argv=None):
+    """Parse CLI arguments for non-interactive execution."""
+    parser = argparse.ArgumentParser(description="Health Data ETL Pipeline")
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "local", "s3"),
+        default="auto",
+        help="Execution mode. auto uses S3 when credentials are present, otherwise local.",
+    )
+    parser.add_argument(
+        "--local-base",
+        type=Path,
+        default=ETL_LOCAL_BASE_DIR,
+        help="Base directory for local ETL outputs.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
     """Main entry point."""
+    args = parse_args(argv)
+    config = build_runtime_config(mode=args.mode, local_base=args.local_base)
+
     print("\n" + "="*60)
     print("HEALTH DATA ETL PIPELINE")
     print("="*60)
-    
-    # Check if running in local test mode or production
-    use_local = True
-    if all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, S3_BUCKET_NAME]):
-        response = input("\nAWS credentials found. Use S3? (y/n): ").lower()
-        if response == 'y':
-            use_local = False
-    
-    if use_local:
+
+    if config.use_local:
         print("\nRunning in LOCAL TEST MODE")
-        print(f"Data location: {LOCAL_BASE}")
-        print("To use S3, configure .env file with AWS credentials")
+        print(f"Data location: {config.local_base}")
+        print("To use S3, configure .env file with AWS credentials or pass --mode s3")
     else:
         print("\nRunning in PRODUCTION MODE")
-        print(f"S3 Bucket: s3://{S3_BUCKET_NAME}")
+        print(f"S3 Bucket: s3://{config.s3_bucket_name}")
     
     # Create Spark session
     print("\nInitializing Spark...")
@@ -400,7 +508,7 @@ def main():
     
     try:
         # Run ETL pipeline
-        run_etl_pipeline(spark, use_local)
+        run_etl_pipeline(spark, config.use_local, resolve_output_paths(config))
         
     except Exception as e:
         print(f"\n✗ ETL Pipeline failed: {e}")

@@ -1,18 +1,19 @@
 # S3 Production Scripts
 
 Production-ready scripts for Kafka → S3 ingestion and ETL pipeline.
+Airflow now schedules the Spark ETL job; this file focuses on the scripts.
 
 ## Quick Start
 
 ### Local Testing (Default)
 ```bash
-# Opens 5 terminal windows with local file storage
+# Opens the producer and alerting windows for local file storage
 start_pipeline.bat
 ```
 
 ### S3 Production Mode
 ```bash
-# Opens 5 terminal windows with S3 storage
+# Opens the producer and alerting windows with S3 storage
 start_pipeline_s3.bat
 ```
 
@@ -21,9 +22,10 @@ start_pipeline_s3.bat
 | Script | Purpose | Mode |
 |--------|---------|------|
 | `kafka_to_s3_stream.py` | Kafka → S3 ingestion | Local or S3 |
-| `etl_s3_pipeline.py` | ETL Bronze/Silver/Gold | S3 only |
+| `etl_s3_pipeline.py` | Standalone ETL for S3-style runs | S3 only |
 | `kafka_to_local_uploader.py` | Kafka → Local (testing) | Local only |
-| `etl_pipeline.py` | ETL for local testing | Local only |
+| `etl_pipeline.py` | Spark ETL invoked by Airflow or manually | Local or S3 |
+| `etl_scheduler.py` | Fallback scheduler wrapper | Local or S3 |
 
 ## Configuration
 
@@ -32,6 +34,13 @@ start_pipeline_s3.bat
 No configuration needed. Data saves to:
 - `data/s3_mock/` - Kafka uploader output
 - `data/etl_output/` - ETL pipeline output
+
+To run the ETL on schedule in local mode, set:
+
+```env
+AIRFLOW_ETL_MODE=local
+ETL_LOCAL_BASE_DIR=/opt/airflow/project/data/etl_output
+```
 
 ### 2. S3 Mode (Production)
 
@@ -99,6 +108,16 @@ python scripts/etl_s3_pipeline.py --schedule --interval 300
 - **Bronze**: Raw ingestion with lineage metadata
 - **Silver**: Data cleaning and feature engineering
 - **Gold**: Clinical aggregation (MEWS scores, fall counts)
+
+### Airflow Orchestration
+
+Primary ETL scheduling is now handled by Airflow.
+
+- DAG: `dags/health_etl_dag.py`
+- DAG id: `health_etl_pipeline`
+- UI: `http://localhost:8081`
+
+See `AIRFLOW_ETL_ORCHESTRATION.md` for the startup flow.
 
 ## S3 Directory Structure
 

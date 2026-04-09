@@ -4,13 +4,13 @@
 
 ### Local Testing (Recommended for Development)
 ```bash
-# Double-click this file
+# Double-click this file for producers and alerting; start Airflow separately for ETL
 start_pipeline.bat
 ```
 
 ### S3 Production Mode
 ```bash
-# Double-click this file (configure .env first)
+# Double-click this file (configure .env first); start Airflow separately for ETL
 start_pipeline_s3.bat
 ```
 
@@ -32,9 +32,10 @@ start_pipeline_s3.bat
 ### ETL Pipelines
 | Script | Description |
 |--------|-------------|
-| `etl_pipeline.py` | ETL for local testing (Bronze/Silver/Gold) |
-| `etl_scheduler.py` | Runs ETL every 30 seconds |
-| `etl_s3_pipeline.py` | ETL for S3 production |
+| `etl_pipeline.py` | Spark ETL for local testing or Airflow runs (Bronze/Silver/Gold) |
+| `etl_scheduler.py` | Fallback wrapper around the Spark ETL |
+| `etl_s3_pipeline.py` | Standalone ETL for S3 production |
+| `dags/health_etl_dag.py` | Airflow DAG for scheduled ETL |
 
 ### Launcher Scripts
 | Script | Mode | Description |
@@ -81,6 +82,7 @@ start_pipeline_s3.bat
 │  Bronze Layer: Raw + lineage metadata                        │
 │  Silver Layer: Cleaned + features (SVM)                      │
 │  Gold Layer:   Aggregated (MEWS scores, fall counts)         │
+│  Orchestrated by Airflow: health_etl_pipeline                │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -147,6 +149,8 @@ AWS_SECRET_ACCESS_KEY=...
 AWS_SESSION_TOKEN=...
 AWS_REGION=us-west-2
 S3_BUCKET_NAME=your-bucket-name
+AIRFLOW_ETL_MODE=auto
+AIRFLOW_ETL_SCHEDULE=*/10 * * * *
 ```
 
 ### Docker Compose (Kafka)
@@ -160,6 +164,10 @@ docker-compose down
 # View logs
 docker-compose logs -f
 ```
+
+### Airflow UI
+- URL: http://localhost:8081
+- DAG: `health_etl_pipeline`
 
 ## 📈 Monitoring
 
