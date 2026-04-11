@@ -1,7 +1,12 @@
 # Airflow ETL Orchestration
 
-Airflow is the primary scheduler for the Spark Bronze/Silver/Gold pipeline.
-The Spark job stays in `scripts/etl_pipeline.py`; Airflow only triggers it.
+Airflow is the primary scheduler for the Bronze/Silver/Gold pipeline.
+It selects the runtime based on `AIRFLOW_ETL_MODE`:
+
+- `local` uses the Spark ETL in `scripts/etl_pipeline.py`
+- `s3` uses the S3-native ETL in `scripts/etl_s3_pipeline.py`
+- `auto` uses S3 when AWS credentials and a bucket are present, otherwise local
+
 `scripts/etl_scheduler.py` remains as a fallback wrapper for manual runs.
 
 ## Services
@@ -28,8 +33,9 @@ For S3 runs:
 - `AWS_REGION=...`
 - `S3_BUCKET_NAME=...`
 
-If `AIRFLOW_ETL_MODE=auto`, the ETL script uses S3 only when the AWS
-credentials and bucket are present. Otherwise it falls back to local mode.
+If `AIRFLOW_ETL_MODE=auto`, Airflow uses the S3-native ETL only when the AWS
+credentials and bucket are present. Otherwise it falls back to the Spark/local
+path.
 
 ## Start Order
 
@@ -84,6 +90,9 @@ Use this flow when the ETL should read and write to S3:
    - `s3://<bucket>/silver/movement/`
    - `s3://<bucket>/gold/vitals_summary/`
    - `s3://<bucket>/gold/movement_summary/`
+
+The Kafka-to-S3 streamer writes into `landing/`, which is the prefix consumed
+by `scripts/etl_s3_pipeline.py`.
 
 ## Fallback Scheduler
 
