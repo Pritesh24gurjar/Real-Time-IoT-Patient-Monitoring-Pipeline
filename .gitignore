@@ -14,6 +14,9 @@ data/etl_output/
 # S3 ETL output (production testing)
 data/s3_etl_output/
 
+# Runtime logs
+logs/
+
 
 # Python cache
 __pycache__/
@@ -39,3 +42,4 @@ Thumbs.db
 !*.md
 data/*.md
 
+logs/*

@@ -11,7 +11,8 @@ from airflow.operators.empty import EmptyOperator
 
 
 PROJECT_DIR = Path(os.getenv("AIRFLOW_PROJECT_DIR", "/opt/airflow/project"))
-ETL_SCRIPT = PROJECT_DIR / "scripts" / "etl_pipeline.py"
+ETL_SPARK_SCRIPT = PROJECT_DIR / "scripts" / "etl_pipeline.py"
+ETL_S3_SCRIPT = PROJECT_DIR / "scripts" / "etl_s3_pipeline.py"
 ETL_MODE = os.getenv("AIRFLOW_ETL_MODE", "auto").strip().lower()
 ETL_SCHEDULE = os.getenv("AIRFLOW_ETL_SCHEDULE", "*/10 * * * *")
 ETL_LOCAL_BASE_DIR = Path(
@@ -22,22 +23,62 @@ if ETL_MODE not in {"auto", "local", "s3"}:
     raise ValueError(f"Unsupported AIRFLOW_ETL_MODE: {ETL_MODE}")
 
 
+def _has_s3_runtime() -> bool:
+    """Return True when the Airflow container has the S3 runtime configured."""
+    return all(
+        os.getenv(name)
+        for name in (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "S3_BUCKET_NAME",
+        )
+    )
+
+
+def _use_s3_runtime() -> bool:
+    """Return True when the DAG should run the S3-native ETL pipeline."""
+    return ETL_MODE == "s3" or (ETL_MODE == "auto" and _has_s3_runtime())
+
+
 def _build_etl_command() -> list[str]:
     """Build the ETL command line from environment-driven config."""
-    command = [
+    if _use_s3_runtime():
+        if not _has_s3_runtime():
+            missing = [
+                name
+                for name in (
+                    "AWS_ACCESS_KEY_ID",
+                    "AWS_SECRET_ACCESS_KEY",
+                    "AWS_SESSION_TOKEN",
+                    "S3_BUCKET_NAME",
+                )
+                if not os.getenv(name)
+            ]
+            raise ValueError(
+                "AIRFLOW_ETL_MODE requested S3, but the following variables are missing: "
+                + ", ".join(missing)
+            )
+
+        return [
+            sys.executable,
+            str(ETL_S3_SCRIPT),
+            "--once",
+        ]
+
+    return [
         sys.executable,
-        str(ETL_SCRIPT),
+        str(ETL_SPARK_SCRIPT),
         "--mode",
-        ETL_MODE,
+        "local",
         "--local-base",
         str(ETL_LOCAL_BASE_DIR),
     ]
-    return command
 
 
 @dag(
     dag_id="health_etl_pipeline",
-    description="Run the Spark Bronze/Silver/Gold ETL on a schedule.",
+    description="Run the Bronze/Silver/Gold ETL on a schedule.",
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     schedule=ETL_SCHEDULE,
     catchup=False,
@@ -48,7 +89,7 @@ def _build_etl_command() -> list[str]:
         "retries": 1,
         "retry_delay": timedelta(minutes=5),
     },
-    tags=["health", "spark", "etl"],
+    tags=["health", "etl", "s3"],
 )
 def health_etl_pipeline():
     start = EmptyOperator(task_id="start")
@@ -56,16 +97,20 @@ def health_etl_pipeline():
 
     @task(task_id="run_spark_etl")
     def run_spark_etl() -> None:
-        if not ETL_SCRIPT.exists():
-            raise FileNotFoundError(f"ETL script not found: {ETL_SCRIPT}")
+        etl_script = ETL_S3_SCRIPT if _use_s3_runtime() else ETL_SPARK_SCRIPT
+        if not etl_script.exists():
+            raise FileNotFoundError(f"ETL script not found: {etl_script}")
 
         ETL_LOCAL_BASE_DIR.mkdir(parents=True, exist_ok=True)
 
         env = os.environ.copy()
         env["ETL_LOCAL_BASE_DIR"] = str(ETL_LOCAL_BASE_DIR)
+        env["AIRFLOW_ETL_MODE"] = ETL_MODE
 
+        command = _build_etl_command()
+        print("Running ETL command:", " ".join(command))
         subprocess.run(
-            _build_etl_command(),
+            command,
             cwd=str(PROJECT_DIR),
             env=env,
             check=True,
