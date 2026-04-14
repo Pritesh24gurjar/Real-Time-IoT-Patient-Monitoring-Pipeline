@@ -13,3 +13,7 @@ python-dotenv>=1.0.0
 
 # For Spark Structured Streaming (install PySpark separately)
 # pyspark>=3.4.0  # Install via: pip install pyspark
+kafka-python  # Required for Spark Kafka integration
+apache-airflow
+pyspark
+pyarrow

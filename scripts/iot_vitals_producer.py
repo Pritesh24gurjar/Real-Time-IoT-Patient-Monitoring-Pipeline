@@ -11,14 +11,24 @@ Usage:
 import json
 import time
 import random
+import os
 from pathlib import Path
 from kafka import KafkaProducer
 
 # Configuration
 KAFKA_BOOTSTRAP_SERVERS = ['localhost:9094']
 KAFKA_TOPIC = 'raw_vitals'
-DATA_DIR = Path(r"C:\Users\prite\Documents\CWRU courses\data eng\DE project\data")
-CSV_FILE = DATA_DIR / "clean_smartwatch_health_data.csv"
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = Path(os.getenv("VITALS_DATA_DIR", str(PROJECT_DIR / "data")))
+CSV_FILE = Path(
+    os.getenv("VITALS_CSV_FILE", str(DATA_DIR / "clean_smartwatch_health_data.csv"))
+)
+
+if not CSV_FILE.exists():
+    raise FileNotFoundError(
+        f"Vitals CSV not found: {CSV_FILE}\n"
+        f"Set VITALS_CSV_FILE or place clean_smartwatch_health_data.csv under {DATA_DIR}"
+    )
 
 # Initialize Kafka Producer
 producer = KafkaProducer(

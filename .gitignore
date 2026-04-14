@@ -39,3 +39,4 @@ Thumbs.db
 !*.md
 data/*.md
 
+logs/*
