@@ -6,8 +6,12 @@
 #   docker-compose logs -f airflow       # View Airflow logs
 
 x-airflow-env: &airflow-env
+  AIRFLOW__WEBSERVER__WEB_SERVER_HOST: "0.0.0.0"
+  AIRFLOW__WEBSERVER__WORKERS: "1"
+  AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/airflow/project/simple_auth_manager_passwords.json.generated"
   AIRFLOW__CORE__LOAD_EXAMPLES: "False"
   AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+  AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "False"
   AIRFLOW_ETL_MODE: ${AIRFLOW_ETL_MODE:-auto}
   AIRFLOW_ETL_SCHEDULE: ${AIRFLOW_ETL_SCHEDULE:-*/10 * * * *}
   AIRFLOW_PROJECT_DIR: /opt/airflow/project
@@ -19,57 +23,41 @@ x-airflow-env: &airflow-env
   S3_BUCKET_NAME: ${S3_BUCKET_NAME:-}
 
 services:
-  # Kafka Broker with KRaft (Kafka Raft) mode - no Zookeeper needed
   kafka:
     image: confluentinc/cp-kafka:latest
     container_name: kafka-broker
     hostname: kafka
     ports:
-      - "9092:9092"  # For Docker internal (kafka-ui)
-      - "9094:9094"  # For host machine (Python scripts)
+      - "9092:9092"
+      - "9094:9094"
     environment:
-      # KRaft cluster configuration
       CLUSTER_ID: "DE-project-cluster-001"
-
-      # Enable KRaft mode
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-
-      # Listeners configuration - for Docker network access
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9094
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9094
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-
-      # Broker settings
       KAFKA_BROKER_ID: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
-
-      # Performance tuning for IoT data
+      KAFKA_LOG_RETENTION_HOURS: 168
       KAFKA_NUM_PARTITIONS: 4
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-
-      # Memory settings
       KAFKA_HEAP_OPTS: "-Xmx512M -Xms512M"
-
     volumes:
       - kafka-data:/var/lib/kafka/data
-
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-
     restart: unless-stopped
 
-  # Kafka UI for monitoring
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -79,15 +67,16 @@ services:
       KAFKA_CLUSTERS_0_NAME: "DE-Project"
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     restart: unless-stopped
 
-  # Airflow for scheduled ETL orchestration
   airflow:
     build:
       context: .
       dockerfile: docker/airflow/Dockerfile
     container_name: airflow
+    user: "${AIRFLOW_UID:-50000}:0"
     ports:
       - "8081:8080"
     environment: *airflow-env
@@ -96,6 +85,10 @@ services:
       - ./logs:/opt/airflow/logs
       - ./plugins:/opt/airflow/plugins
       - ./:/opt/airflow/project
+      - ./simple_auth_manager_passwords.json.generated:/opt/airflow/project/simple_auth_manager_passwords.json.generated
+    depends_on:
+      kafka:
+        condition: service_healthy
     command: standalone
     restart: unless-stopped
 

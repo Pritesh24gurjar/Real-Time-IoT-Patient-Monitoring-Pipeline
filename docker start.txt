@@ -1,0 +1,15 @@
+newgrp docker
+
+cd ~/Real-Time-IoT-Patient-Monitoring-Pipeline
+
+docker-compose up -d
+
+# List all topics
+docker exec -it kafka-broker kafka-topics \
+  --list --bootstrap-server localhost:9092
+
+# Monitor raw vitals (if critical-alerts doesn't exist yet)
+docker exec -it kafka-broker kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic raw-vitals \
+  --from-beginning --max-messages 5
